@@ -1,0 +1,22 @@
+﻿# Core data and ML
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.4.2
+
+# HuggingFace stack
+huggingface-hub==0.23.0
+datasets==2.19.0
+transformers==4.40.0
+tokenizers==0.19.1
+
+# Embeddings and retrieval
+sentence-transformers==2.7.0
+torch==2.2.2
+rank-bm25==0.2.2
+chromadb==0.4.24
+
+# Utilities
+pyyaml==6.0.1
+tqdm==4.66.4
+
+onnxruntime==1.17.3  # pinned: 1.31.0 silently crashes on import (Windows + py3.11)
