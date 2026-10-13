@@ -12,7 +12,7 @@ dataset:
 # Three-stage workflow: 100 (build) -> 1000 (debug) -> 10000 (run)
 # Set slice_size to match the current stage.
 slice:
-  size: 100
+  size: 1000
   method: "stratified"   # "first" | "random" | "stratified"
   random_seed: 42        # for reproducibility when method != "first"
 
