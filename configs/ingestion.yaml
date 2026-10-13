@@ -1,0 +1,76 @@
+# Ingestion pipeline configuration
+# Every parameter here is read at runtime. Change a value and re-run.
+
+# --- Dataset ---
+dataset:
+  name: "onyx-dot-app/EnterpriseRAG-Bench"
+  config_documents: "documents"
+  config_questions: "questions"
+  split: "test"
+
+# --- Slice selection ---
+# Three-stage workflow: 100 (build) -> 1000 (debug) -> 10000 (run)
+# Set slice_size to match the current stage.
+slice:
+  size: 100
+  method: "stratified"   # "first" | "random" | "stratified"
+  random_seed: 42        # for reproducibility when method != "first"
+
+# --- Chunking ---
+# Source-aware chunk sizes. Per-source overrides fall back to default.
+chunking:
+  default:
+    strategy: "recursive"
+    chunk_size: 512
+    chunk_overlap: 50
+  per_source:
+    slack:
+      strategy: "thread"
+      max_tokens: 2000
+    gmail:
+      strategy: "atomic"      # one message per chunk
+    jira:
+      strategy: "atomic"
+    linear:
+      strategy: "atomic"
+    confluence:
+      strategy: "headings"    # split at markdown headings
+      max_tokens: 1024
+    google_drive:
+      strategy: "recursive"
+      chunk_size: 512
+    hubspot:
+      strategy: "atomic"
+    fireflies:
+      strategy: "speaker_turns"
+      max_tokens: 1024
+    github:
+      strategy: "atomic"
+
+# --- Embedding ---
+embedding:
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  dimensions: 384
+  batch_size: 32
+  normalize: true
+
+# --- Vector store ---
+vector_store:
+  backend: "chromadb"
+  persist_directory: "data/indexes/chroma"
+  collection_name: "enterprise_rag"
+
+# --- Access control (metadata attached to every chunk) ---
+# These fields are added to each chunk at ingestion time.
+# Values are synthesized from source_type via configs/access_rules.yaml (see later step).
+access_control:
+  enabled: true
+  fields:
+    - "access_level"
+    - "department"
+
+# --- Logging ---
+logging:
+  level: "INFO"
+  log_file: "logs/ingestion.log"
+  progress_bar: true
