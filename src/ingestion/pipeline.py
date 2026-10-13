@@ -20,7 +20,7 @@ from typing import Any
 
 from src.ingestion.chunker import chunk_corpus
 from src.ingestion.embedder import Embedder
-from src.ingestion.loader import load_config, load_slice
+from src.ingestion.loader import load_config, load_slice_cached
 from src.ingestion.store import VectorStore
 
 
@@ -36,7 +36,7 @@ def run_ingestion(config: dict[str, Any], reset: bool = True) -> dict[str, Any]:
     print("STEP 1: Load documents")
     print("=" * 60)
     t0 = time.time()
-    docs = load_slice(config)
+    docs = load_slice_cached(config)
     stats["docs_loaded"] = len(docs)
     stats["load_seconds"] = round(time.time() - t0, 2)
     print(f"Loaded {len(docs)} documents in {stats['load_seconds']}s")

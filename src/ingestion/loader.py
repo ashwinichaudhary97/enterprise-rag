@@ -117,3 +117,42 @@ if __name__ == "__main__":
     print("Source distribution:")
     for source, n in sorted(counts.items(), key=lambda x: -x[1]):
         print(f"  {source}: {n}")
+
+
+
+# ---------------------------------------------------------------------------
+# Slice cache
+# ---------------------------------------------------------------------------
+
+def _cache_path(config: dict[str, Any]) -> Path:
+    """Compute the cache file path from the slice config."""
+    slice_cfg = config["slice"]
+    size = int(slice_cfg["size"])
+    method = slice_cfg["method"]
+    seed = int(slice_cfg.get("random_seed", 42))
+    cache_dir = Path("data/processed")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"slice_{size}_{method}_{seed}.json"
+
+
+def load_slice_cached(config: dict[str, Any], force_rebuild: bool = False) -> list[dict[str, Any]]:
+    """Load a slice with a JSON cache.
+
+    On first call, loads from HF cache (slow, ~200s) and writes JSON.
+    On subsequent calls, reads the JSON (~1s) unless force_rebuild is True.
+    """
+    import json
+
+    cache_path = _cache_path(config)
+
+    if cache_path.exists() and not force_rebuild:
+        print(f"Reading slice from cache: {cache_path}")
+        with cache_path.open(encoding="utf-8") as f:
+            return json.load(f)
+
+    print(f"Cache miss or rebuild forced. Loading from HF and writing {cache_path}...")
+    docs = load_slice(config)
+    with cache_path.open("w", encoding="utf-8") as f:
+        json.dump(docs, f, ensure_ascii=False)
+    print(f"Wrote cache with {len(docs)} documents.")
+    return docs
