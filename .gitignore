@@ -53,3 +53,6 @@ desktop.ini
 
 # Docker (local overrides)
 docker-compose.override.yml
+
+# Eval checkpoints (intermediate state, regenerated each run)
+results/checkpoint_*.json

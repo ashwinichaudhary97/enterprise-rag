@@ -10,6 +10,13 @@ Configs evaluated:
     hybrid        - dense + BM25 RRF fusion, top-5
     hybrid_rerank - hybrid top-20 -> cross-encoder -> top-5
 
+Checkpointing:
+    After each config completes, results are saved to
+    results/checkpoint_<config>.json. Rerank checkpoints every 25
+    questions. On re-run, completed configs are loaded from
+    checkpoints and skipped. Partial rerank results resume from the
+    last checkpoint.
+
 Note: questions with empty expected_doc_ids (info_not_found) are
 skipped by retrieval metrics, since recall/MRR/nDCG are undefined
 without ground truth.
@@ -35,6 +42,32 @@ from src.retrieval.rerank import Reranker, rerank_retrieve
 
 TOP_K = 5
 CANDIDATE_POOL = 20
+CHECKPOINT_EVERY = 25
+RESULTS_DIR = Path("results")
+
+
+def save_checkpoint(config_name: str, per_query: list[dict[str, Any]]) -> None:
+    """Save partial results for one config after every N questions."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / f"checkpoint_{config_name}.json"
+    path.write_text(
+        json.dumps(per_query, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
+def load_checkpoint(config_name: str) -> list[dict[str, Any]] | None:
+    """Load existing checkpoint for one config, or None."""
+    path = RESULTS_DIR / f"checkpoint_{config_name}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list) and data:
+            return data
+    except Exception:
+        pass
+    return None
 
 
 def load_questions() -> list[dict[str, Any]]:
@@ -115,21 +148,39 @@ def run_config_hybrid(questions, store, embedder, bm25):
 
 
 def run_config_hybrid_rerank(questions, store, embedder, bm25, reranker):
-    """Run hybrid + rerank config on all questions."""
+    """Run hybrid + rerank config. Checkpoints every 25 questions."""
     print("\n=== Config: hybrid_rerank ===")
-    print(f"  (slowest config: {len(questions)} questions x {CANDIDATE_POOL} candidates)")
+
+    existing = load_checkpoint("hybrid_rerank")
+    start_idx = len(existing) if existing else 0
+    per_query = list(existing) if existing else []
+
+    if start_idx > 0:
+        print(f"  Resuming from checkpoint at question {start_idx}/{len(questions)}")
+    else:
+        print(f"  Fresh start: {len(questions)} questions x {CANDIDATE_POOL} candidates")
+
     t0 = time.time()
-    per_query = []
-    for i, q in enumerate(questions, 1):
-        if i % 25 == 0 or i == len(questions):
-            elapsed = time.time() - t0
-            eta = (elapsed / i) * (len(questions) - i) if i > 0 else 0
-            print(f"  {i}/{len(questions)}  elapsed={elapsed:.1f}s  eta={eta:.0f}s")
+    for i in range(start_idx, len(questions)):
+        q = questions[i]
         retrieved = rerank_retrieve(
             q["question"], store, embedder, bm25, reranker,
             top_k=TOP_K, candidate_pool=CANDIDATE_POOL,
         )
         per_query.append(_evaluate_one(q, retrieved))
+
+        done = i + 1
+        if done % CHECKPOINT_EVERY == 0 or done == len(questions):
+            save_checkpoint("hybrid_rerank", per_query)
+            elapsed = time.time() - t0
+            processed = done - start_idx
+            remaining = len(questions) - done
+            eta = (elapsed / processed) * remaining if processed > 0 else 0
+            print(
+                f"  {done}/{len(questions)}  elapsed={elapsed:.1f}s  "
+                f"eta={eta:.0f}s  (checkpoint saved)"
+            )
+
     print(f"  done in {time.time() - t0:.1f}s")
     return per_query
 
@@ -150,14 +201,15 @@ def write_leaderboard(
             "n_ground_truth": agg.get("num_with_ground_truth", 0),
         })
 
-    # Sort by recall@5 descending
     rows.sort(key=lambda r: -r["recall_at_5"])
 
     lines = []
     lines.append("# Retrieval Leaderboard")
     lines.append("")
-    lines.append(f"Evaluated on {rows[0]['n_ground_truth']} benchmark questions "
-                 f"with ground truth (info_not_found questions excluded).")
+    lines.append(
+        f"Evaluated on {rows[0]['n_ground_truth']} benchmark questions "
+        f"with ground truth (info_not_found questions excluded)."
+    )
     lines.append("")
     lines.append("| Rank | Config | Recall@5 | nDCG@5 | MRR |")
     lines.append("|------|--------|----------|--------|-----|")
@@ -185,8 +237,7 @@ def write_raw_metrics(
 
 
 def main() -> int:
-    results_dir = Path("results")
-    results_dir.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Loading benchmark questions...")
     questions = load_questions()
@@ -200,15 +251,32 @@ def main() -> int:
 
     configs: dict[str, list[dict[str, Any]]] = {}
 
-    configs["dense"] = run_config_dense(questions, store, embedder)
-    configs["bm25"] = run_config_bm25(questions, bm25)
-    configs["hybrid"] = run_config_hybrid(questions, store, embedder, bm25)
-    configs["hybrid_rerank"] = run_config_hybrid_rerank(
-        questions, store, embedder, bm25, reranker
+    def _run_or_load(name: str, runner):
+        """Run a config, or load its checkpoint if complete."""
+        existing = load_checkpoint(name)
+        if existing and len(existing) == len(questions):
+            print(f"\n=== Config: {name} (loaded from checkpoint) ===")
+            return existing
+        result = runner()
+        save_checkpoint(name, result)
+        return result
+
+    configs["dense"] = _run_or_load(
+        "dense", lambda: run_config_dense(questions, store, embedder)
+    )
+    configs["bm25"] = _run_or_load(
+        "bm25", lambda: run_config_bm25(questions, bm25)
+    )
+    configs["hybrid"] = _run_or_load(
+        "hybrid", lambda: run_config_hybrid(questions, store, embedder, bm25)
+    )
+    configs["hybrid_rerank"] = _run_or_load(
+        "hybrid_rerank",
+        lambda: run_config_hybrid_rerank(questions, store, embedder, bm25, reranker),
     )
 
-    write_leaderboard(configs, results_dir / "leaderboard.md")
-    write_raw_metrics(configs, results_dir / "raw_metrics.json")
+    write_leaderboard(configs, RESULTS_DIR / "leaderboard.md")
+    write_raw_metrics(configs, RESULTS_DIR / "raw_metrics.json")
 
     print("\n" + "=" * 60)
     print("EVALUATION COMPLETE")
