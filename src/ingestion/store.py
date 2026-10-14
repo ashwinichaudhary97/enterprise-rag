@@ -10,6 +10,7 @@ control in Phase 3 filters at the collection level.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +23,11 @@ class VectorStore:
 
     def __init__(
         self,
-        persist_directory: str | Path = "data/indexes/chroma",
+        persist_directory: str | Path | None = None,
         collection_name: str = "enterprise_rag",
     ) -> None:
+        if persist_directory is None:
+            persist_directory = os.environ.get("CHROMA_PATH","data/indexes/chroma")
         self.persist_directory = str(persist_directory)
         self.collection_name = collection_name
 

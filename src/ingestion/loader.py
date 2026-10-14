@@ -9,6 +9,7 @@ passed to the chunker.
 
 from __future__ import annotations
 
+import os
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -130,7 +131,7 @@ def _cache_path(config: dict[str, Any]) -> Path:
     size = int(slice_cfg["size"])
     method = slice_cfg["method"]
     seed = int(slice_cfg.get("random_seed", 42))
-    cache_dir = Path("data/processed")
+    cache_dir = Path(os.environ.get("CACHE_DIR", "data/processed"))
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"slice_{size}_{method}_{seed}.json"
 
