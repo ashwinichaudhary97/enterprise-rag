@@ -6,10 +6,15 @@ their embeddings and metadata, and provides query and inspection methods.
 The same class is used during ingestion (add) and later during retrieval
 (query). Metadata filtering (`where` clause) is preserved because access
 control in Phase 3 filters at the collection level.
+
+add_chunks is checkpointed: it writes .add_progress.json in the persist
+directory after every batch. If the process is killed mid-write, the next
+run resumes from the last saved batch instead of restarting.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -27,7 +32,7 @@ class VectorStore:
         collection_name: str = "enterprise_rag",
     ) -> None:
         if persist_directory is None:
-            persist_directory = os.environ.get("CHROMA_PATH","data/indexes/chroma")
+            persist_directory = os.environ.get("CHROMA_PATH", "data/indexes/chroma")
         self.persist_directory = str(persist_directory)
         self.collection_name = collection_name
 
@@ -56,6 +61,9 @@ class VectorStore:
     ) -> int:
         """Insert chunks with their embeddings. Returns the count inserted.
 
+        Checkpointed: writes .add_progress.json after every batch. On
+        restart, resumes from the last saved batch.
+
         Args:
             chunks: list of dicts with keys: chunk_id, doc_id, source_type,
                     chunk_index, text, metadata
@@ -71,7 +79,6 @@ class VectorStore:
             )
 
         total = len(chunks)
-        added = 0
 
         # ChromaDB expects plain lists for embeddings, dicts for metadata.
         embeddings_list = [
@@ -79,7 +86,26 @@ class VectorStore:
             for emb in embeddings
         ]
 
-        for start in range(0, total, batch_size):
+        # Check for existing progress.
+        ckpt_path = Path(self.persist_directory) / ".add_progress.json"
+        ckpt_state: dict[str, Any] = {"added": 0}
+        if ckpt_path.exists():
+            try:
+                ckpt_state = json.loads(ckpt_path.read_text(encoding="utf-8"))
+            except Exception:
+                ckpt_state = {"added": 0}
+
+        resume_from = int(ckpt_state.get("added", 0))
+        if resume_from >= total and total > 0:
+            print(f"add_chunks already complete ({resume_from}/{total}), skipping")
+            if ckpt_path.exists():
+                ckpt_path.unlink()
+            return resume_from
+        if 0 < resume_from < total:
+            print(f"Resuming add_chunks from {resume_from}/{total}")
+
+        added = resume_from
+        for start in range(resume_from, total, batch_size):
             end = min(start + batch_size, total)
             batch_chunks = chunks[start:end]
 
@@ -89,8 +115,14 @@ class VectorStore:
                 embeddings=embeddings_list[start:end],
                 metadatas=[self._sanitize_metadata(c) for c in batch_chunks],
             )
-            added += len(batch_chunks)
+            added = end
+            ckpt_path.write_text(json.dumps({"added": added}), encoding="utf-8")
 
+            if added % 50000 < batch_size or added == total:
+                print(f"  stored {added}/{total}")
+
+        if ckpt_path.exists():
+            ckpt_path.unlink()
         return added
 
     # -----------------------------------------------------------------
@@ -113,7 +145,11 @@ class VectorStore:
         Returns:
             dict with keys: ids, documents, metadatas, distances
         """
-        emb = query_embedding.tolist() if hasattr(query_embedding, "tolist") else list(query_embedding)
+        emb = (
+            query_embedding.tolist()
+            if hasattr(query_embedding, "tolist")
+            else list(query_embedding)
+        )
 
         kwargs: dict[str, Any] = {
             "query_embeddings": [emb],
@@ -136,6 +172,10 @@ class VectorStore:
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
+        # Clear any checkpoint state from a previous run.
+        ckpt_path = Path(self.persist_directory) / ".add_progress.json"
+        if ckpt_path.exists():
+            ckpt_path.unlink()
 
     # -----------------------------------------------------------------
     # Helpers
